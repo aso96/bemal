@@ -128,9 +128,6 @@ struct sam_model {
 
     std::vector<sam_layer_dec> layers_dec;
 
-    // TODO: temporary here, move to sam_context
-    sam_state state;
-
     //
     struct ggml_context * ctx;
     std::map<std::string, struct ggml_tensor *> tensors;
@@ -397,9 +394,9 @@ bool sam_model_load(const std::string & fname, sam_model & model) {
     // create the ggml context
     {
         struct ggml_init_params params = {
-            .mem_size   = ctx_size,
-            .mem_buffer = NULL,
-            .no_alloc   = false,
+            /*.mem_size   =*/ ctx_size,
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ false,
         };
 
         ctx = ggml_init(params);
@@ -513,10 +510,10 @@ bool sam_model_load(const std::string & fname, sam_model & model) {
         {
             auto & enc = model.enc_prompt;
 
-            enc.pe = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_enc_out_chans/2, 2);
+            enc.pe = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_enc_out_chans/2, 2);
 
-            enc.not_a_pt_embd_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n_enc_out_chans);
-            enc.no_mask_embd_w  = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n_enc_out_chans);
+            enc.not_a_pt_embd_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_enc_out_chans);
+            enc.no_mask_embd_w  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_enc_out_chans);
 
             model.tensors["prompt_encoder.pe_layer.positional_encoding_gaussian_matrix"] = enc.pe;
             model.tensors["prompt_encoder.not_a_point_embed.weight"] = enc.not_a_pt_embd_w;
@@ -663,9 +660,9 @@ bool sam_encode_image(
     static void * scr1 = malloc(scr1_size);
 
     struct ggml_init_params params = {
-        .mem_size   = buf_size,
-        .mem_buffer = buf,
-        .no_alloc   = false,
+        /*.mem_size   =*/ buf_size,
+        /*.mem_buffer =*/ buf,
+        /*.no_alloc   =*/ false,
     };
 
     struct ggml_context * ctx0 = ggml_init(params);
@@ -914,7 +911,7 @@ bool sam_encode_image(
     }
 
     // TODO: avoid copy
-    cur = ggml_cpy(state.ctx, cur, state.embd_img);
+    cur = ggml_cpy(ctx0, cur, state.embd_img);
 
     ggml_set_name(cur, "check");
 
@@ -960,7 +957,6 @@ bool sam_encode_image(
                 sum += data[i];
             }
             printf("sum:  %f\n", sum);
-            exit(0);
         };
 
         auto print_t_f16 = [&](struct ggml_tensor * t) {
@@ -983,7 +979,6 @@ bool sam_encode_image(
                 sum += ggml_fp16_to_fp32(data[i]);
             }
             printf("sum:  %f\n", sum);
-            exit(0);
         };
 
         auto * t = ggml_get_tensor(ctx0, "check");
@@ -1010,6 +1005,7 @@ bool sam_encode_image(
 //
 bool sam_encode_prompt(
         const sam_model     & model,
+                  sam_state & state,
                         int   nx,
                         int   ny,
                   sam_point   point,
@@ -1022,9 +1018,9 @@ bool sam_encode_prompt(
     static void * buf = malloc(buf_size);
 
     struct ggml_init_params params = {
-        .mem_size   = buf_size,
-        .mem_buffer = buf,
-        .no_alloc   = false,
+        /*.mem_size   =*/ buf_size,
+        /*.mem_buffer =*/ buf,
+        /*.no_alloc   =*/ false,
     };
 
     struct ggml_context * ctx0 = ggml_init(params);
@@ -1087,10 +1083,22 @@ bool sam_encode_prompt(
         ggml_build_forward_expand(&gf, ggml_add_inplace(ctx0, ggml_view_2d(ctx0, cur, cur->ne[0], 1, cur->nb[1], 0), enc.pt_embd[1]));
     }
 
+    // TODO: avoid copy
+    cur = ggml_cpy(ctx0, cur, state.embd_prompt_sparse);
+
+    ggml_build_forward_expand(&gf, cur);
+
+    cur = ggml_repeat(ctx0,
+            ggml_cont(ctx0,
+                ggml_view_3d(ctx0, enc.no_mask_embd_w,
+                    1, 1, enc.no_mask_embd_w->ne[0], enc.no_mask_embd_w->nb[0], enc.no_mask_embd_w->nb[0], 0)),
+            state.embd_prompt_dense);
+
+    ggml_build_forward_expand(&gf, cur);
+
     ggml_set_name(cur, "check");
 
     // run the computation
-    ggml_build_forward_expand(&gf, cur);
     ggml_graph_compute       (ctx0, &gf);
 
     // print
@@ -1110,9 +1118,9 @@ bool sam_encode_prompt(
             //    printf("\n");
             //}
             //printf("\n");
-            for (int y = 0; y < 2; ++y) {
-                for (int x = 0; x < 256; ++x) {
-                    printf("%5.2f ", data[y*256 + x]);
+            for (int y = 0; y < 64; ++y) {
+                for (int x = 0; x < 64; ++x) {
+                    printf("%5.2f ", data[255*64*64 + y*64 + x]);
                 }
                 printf("\n");
             }
@@ -1129,7 +1137,6 @@ bool sam_encode_prompt(
                 sum += data[i];
             }
             printf("sum:  %f\n", sum);
-            exit(0);
         };
 
         auto print_t_f16 = [&](struct ggml_tensor * t) {
@@ -1152,7 +1159,6 @@ bool sam_encode_prompt(
                 sum += ggml_fp16_to_fp32(data[i]);
             }
             printf("sum:  %f\n", sum);
-            exit(0);
         };
 
         auto * t = ggml_get_tensor(ctx0, "check");
@@ -1217,6 +1223,7 @@ int main(int argc, char ** argv) {
     int64_t t_load_us = 0;
 
     sam_model model;
+    sam_state state;
 
     // load the model
     {
@@ -1230,15 +1237,36 @@ int main(int argc, char ** argv) {
         t_load_us = ggml_time_us() - t_start_us;
     }
 
-    //if (!sam_encode_image(model, img1, params.n_threads)) {
-    //    fprintf(stderr, "%s: failed to encode image\n", __func__);
-    //    return 1;
-    //}
+    {
+        static size_t buf_size = 256u*1024*1024;
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ buf_size,
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ false,
+        };
+
+        state.ctx = ggml_init(params);
+
+        state.embd_img = ggml_new_tensor_3d(state.ctx, GGML_TYPE_F32,
+                model.hparams.n_img_embd(), model.hparams.n_img_embd(), model.hparams.n_enc_out_chans);
+
+        // TODO: should depend on the number of points / boxes / etc
+        state.embd_prompt_sparse = ggml_new_tensor_2d(state.ctx, GGML_TYPE_F32, model.hparams.n_enc_out_chans, 2);
+
+        state.embd_prompt_dense  = ggml_new_tensor_3d(state.ctx, GGML_TYPE_F32,
+                model.hparams.n_img_embd(), model.hparams.n_img_embd(), model.hparams.n_enc_out_chans);
+    }
+
+    if (!sam_encode_image(model, state, img1, params.n_threads)) {
+        fprintf(stderr, "%s: failed to encode image\n", __func__);
+        return 1;
+    }
 
     // TODO: user input
     const sam_point pt = { 414.375f, 162.796875f, };
 
-    if (!sam_encode_prompt(model, img0.nx, img0.ny, pt, params.n_threads)) {
+    if (!sam_encode_prompt(model, state, img0.nx, img0.ny, pt, params.n_threads)) {
         fprintf(stderr, "%s: failed to encode prompt\n", __func__);
         return 1;
     }

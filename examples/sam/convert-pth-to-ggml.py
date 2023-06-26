@@ -104,7 +104,7 @@ for k, v in model.items():
     ftype_cur = 1
     if ftype == 0 or n_dims == 1 or \
             name == "image_encoder.pos_embed" or \
-            name.startswith("prompt_encoder.point_embeddings"):
+            name.startswith("prompt_encoder"):
         print("  Converting to float32")
         data = data.astype(np.float32)
         ftype_cur = 0
